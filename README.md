@@ -182,10 +182,4 @@ the last 100 stored events.
 To test an end-to-end detection, put the harmless
 [EICAR test file](https://www.eicar.org/download-anti-malware-testfile/) in a
 scanned directory, run a scan, and watch for a `malware_detection` event in the
-mock server's output:
-
-```bash
-printf '%s' 'X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' > /tmp/eicar.com
-sudo systemctl start endpoint-scan.service
-rm /tmp/eicar.com
-```
+mock server's output.
