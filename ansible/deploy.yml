@@ -1,0 +1,6 @@
+---
+- name: Deploy Linux Security Agent (scheduled ClamAV scan)
+  hosts: localhost
+  become: true
+  roles:
+    - linux_security_agent

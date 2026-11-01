@@ -1,0 +1,92 @@
+---
+# ---------------------------------------------------------------- stop
+- name: Uninstall | check agent units
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ item }}"
+  loop: "{{ agent_units }}"
+  register: agent_unit_files
+
+# Timer first so it cannot start a scan while the rest is torn down.
+- name: Uninstall | stop and disable agent units
+  ansible.builtin.systemd:
+    name: "{{ item.item }}"
+    state: stopped
+    enabled: false
+  loop: "{{ agent_unit_files.results | reverse | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stat.exists
+
+# ---------------------------------------------------------------- flush
+- name: Uninstall | check for queued events
+  ansible.builtin.stat:
+    path: "{{ agent_config_dir }}/agent.env"
+  register: agent_env_file
+
+# Uses the unit's own EnvironmentFile parsing; a failure only means some
+# events were not delivered, so it warns instead of stopping the uninstall.
+- name: Uninstall | flush queued events to HEC
+  ansible.builtin.command:
+    argv:
+      - systemd-run
+      - --wait
+      - --quiet
+      - --collect
+      - --unit=endpoint-agent-flush
+      - "--property=EnvironmentFile={{ agent_config_dir }}/agent.env"
+      - /usr/bin/python3
+      - "{{ agent_install_dir }}/endpoint_agent.py"
+      - flush
+  register: agent_flush
+  changed_when: true
+  failed_when: false
+  when:
+    - agent_uninstall_flush | bool
+    - agent_env_file.stat.exists
+
+- name: Uninstall | warn if events were left undelivered
+  ansible.builtin.debug:
+    msg: >-
+      Flush exited {{ agent_flush.rc }}; events still queued in
+      {{ agent_database }} will be deleted. Set agent_uninstall_flush=false
+      to skip the flush, or fix HEC and re-run to deliver them first.
+  when:
+    - agent_flush is not skipped
+    - agent_flush.rc | default(0) != 0
+
+# ---------------------------------------------------------------- remove
+- name: Uninstall | remove systemd units
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item }}"
+    state: absent
+  loop: "{{ agent_units }}"
+  register: agent_units_removed
+
+- name: Uninstall | reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: agent_units_removed is changed
+
+- name: Uninstall | remove agent files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ [agent_home, agent_install_dir ~ '/endpoint_agent.py', agent_config_dir,
+             agent_spool, agent_state_dir, agent_log_dir] + agent_legacy_paths }}"
+
+# ---------------------------------------------------------------- packages
+- name: Uninstall | stop signature updates
+  ansible.builtin.systemd:
+    name: "{{ freshclam_service }}"
+    state: stopped
+    enabled: false
+  when:
+    - agent_uninstall_packages | bool
+    - freshclam_service | length > 0
+  failed_when: false
+
+- name: Uninstall | remove ClamAV packages
+  ansible.builtin.dnf:
+    name: "{{ clamav_packages }}"
+    state: absent
+  when: agent_uninstall_packages | bool

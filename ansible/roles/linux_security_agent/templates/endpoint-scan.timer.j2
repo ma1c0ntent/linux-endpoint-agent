@@ -1,0 +1,16 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Daily endpoint ClamAV scan
+
+[Timer]
+OnCalendar={{ scan_on_calendar }}
+RandomizedDelaySec={{ scan_randomized_delay }}
+{% if scan_fixed_random_delay | bool %}
+FixedRandomDelay=true
+{% endif %}
+Persistent=true
+AccuracySec=1m
+Unit=endpoint-scan.service
+
+[Install]
+WantedBy=timers.target

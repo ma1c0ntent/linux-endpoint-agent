@@ -1,0 +1,12 @@
+{{ {
+  "clamscan": clamscan_bin,
+  "paths": scan_paths,
+  "exclude_dirs": scan_exclude_dirs + ["^" ~ agent_home ~ "/"],
+  "skip_fstypes": scan_skip_fstypes,
+  "max_filesize": scan_max_filesize,
+  "max_scansize": scan_max_scansize,
+  "tempdir": agent_state_dir ~ "/tmp",
+  "database_dir": "",
+  "max_detection_events": scan_max_detection_events,
+  "extra_args": scan_extra_args
+} | to_nice_json }}

@@ -1,0 +1,14 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart endpoint agent
+  ansible.builtin.systemd:
+    name: endpoint-agent.service
+    state: restarted
+
+- name: Restart scan timer
+  ansible.builtin.systemd:
+    name: endpoint-scan.timer
+    state: restarted

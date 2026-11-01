@@ -1,0 +1,34 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Endpoint telemetry agent - scheduled ClamAV scan
+Documentation=file://{{ agent_install_dir }}/endpoint_agent.py
+
+[Service]
+Type=oneshot
+EnvironmentFile={{ agent_config_dir }}/agent.env
+# Host /tmp is read-only under ProtectSystem=strict; use the writable state dir.
+Environment=TMPDIR={{ agent_state_dir }}/tmp
+ExecStart=/usr/bin/python3 {{ agent_install_dir }}/endpoint_agent.py scan
+TimeoutStartSec={{ scan_timeout }}
+
+# Stay out of the way of interactive work.
+Nice=19
+IOSchedulingClass=idle
+CPUQuota={{ scan_cpu_quota }}
+MemoryMax={{ scan_memory_max }}
+
+# Read-only view of the host; writes only to spool, state and logs.
+# /tmp must stay the host /tmp, so no PrivateTmp.
+ProtectSystem=strict
+ReadWritePaths={{ agent_spool }} {{ agent_state_dir }} {{ agent_log_dir }}
+ProtectHome={{ scan_protect_home }}
+PrivateNetwork=true
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true

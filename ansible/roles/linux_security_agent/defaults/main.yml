@@ -1,0 +1,101 @@
+---
+# ---- Uninstall -----------------------------------------------------------
+agent_uninstall: false            # true = remove the agent instead of installing
+agent_uninstall_flush: true       # try to send queued events to HEC before removal
+agent_uninstall_packages: false   # also remove ClamAV packages and stop freshclam
+
+agent_units:
+  - endpoint-agent.service
+  - endpoint-scan.service
+  - endpoint-scan.timer
+
+# ---- Paths ---------------------------------------------------------------
+agent_home: /opt/linux-security-agent
+agent_install_dir: "{{ agent_home }}/bin"
+agent_config_dir: "{{ agent_home }}/etc"
+agent_spool: "{{ agent_home }}/var/spool"
+agent_state_dir: "{{ agent_home }}/var/lib"
+agent_log_dir: "{{ agent_home }}/var/log"
+agent_database: "{{ agent_state_dir }}/events.db"
+agent_log_max_bytes: 10485760   # per file, before rotating
+agent_log_backups: 5
+
+# Pre-/opt install locations, removed on deploy ([] to keep).
+agent_legacy_paths:
+  - /usr/local/libexec/endpoint_agent.py
+  - /etc/linux-security-agent
+  - /var/spool/linux-security-agent
+  - /var/lib/linux-security-agent
+
+# ---- Splunk HEC ----------------------------------------------------------
+hec_url: "http://localhost:8088"
+hec_token: "dev-token-12345"
+hec_index: security
+hec_sourcetype: "linux:security:telemetry"
+hec_ca_file: ""            # empty = system trust store
+hec_timeout: 15
+
+# ---- Worker --------------------------------------------------------------
+agent_batch_size: 25
+agent_poll_interval: 5
+agent_heartbeat_interval: 3600
+agent_max_queue_events: 50000
+agent_max_hash_bytes: 536870912
+agent_worker_cpu_quota: 20%
+agent_worker_memory_max: 256M
+
+# ---- ClamAV --------------------------------------------------------------
+clamav_packages:
+  - clamav
+  - clamav-update
+clamscan_bin: /usr/bin/clamscan
+clamav_db_dir: /var/lib/clamav
+freshclam_service: clamav-freshclam.service   # "" = signatures managed elsewhere
+freshclam_on_install: true                     # seed DB if empty before first scan
+
+# Units from the on-access design to stop and disable if present.
+agent_disable_units:
+  - clamav-clamonacc.service
+# clamd config that may still carry the old VirusEvent hook ("" to skip).
+agent_legacy_clamd_config: /etc/clamd.d/scan.conf
+
+# ---- Scan scope ----------------------------------------------------------
+scan_paths:
+  - /tmp
+  - /var/tmp
+  - /opt
+  - /usr/local
+scan_exclude_dirs:
+  - "^/proc/"
+  - "^/sys/"
+  - "^/dev/"
+  - "^/run/"
+  - "^/home/"
+  - "^/mnt/"
+scan_skip_fstypes:
+  - nfs
+  - nfs4
+  - cifs
+  - smb3
+  - smbfs
+  - fuse.sshfs
+  - glusterfs
+  - ceph
+  - 9p
+  - autofs
+  - afs
+  - lustre
+scan_max_filesize: 100M
+scan_max_scansize: 400M
+scan_max_detection_events: 1000
+scan_extra_args: []
+
+# ---- Schedule and resource limits ---------------------------------------
+scan_on_calendar: "*-*-* 02:00:00"
+scan_randomized_delay: 2h
+scan_fixed_random_delay: true   # systemd >= 247; older systemd logs a warning and ignores it
+scan_timeout: 6h
+scan_cpu_quota: 50%
+scan_memory_max: 2G             # clamscan loads the full signature DB each run
+scan_protect_home: "true"       # hides /home, /root, /run/user from the scan
+scan_run_on_deploy: false

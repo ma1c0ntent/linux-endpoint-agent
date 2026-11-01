@@ -1,0 +1,32 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Endpoint telemetry agent - queue and Splunk HEC forwarder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile={{ agent_config_dir }}/agent.env
+ExecStart=/usr/bin/python3 {{ agent_install_dir }}/endpoint_agent.py worker
+Restart=always
+RestartSec=5
+
+CPUQuota={{ agent_worker_cpu_quota }}
+MemoryMax={{ agent_worker_memory_max }}
+
+ProtectSystem=strict
+ReadWritePaths={{ agent_spool }} {{ agent_state_dir }} {{ agent_log_dir }}
+ProtectHome=true
+PrivateTmp=true
+CapabilityBoundingSet=
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

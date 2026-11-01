@@ -1,0 +1,231 @@
+---
+# ---------------------------------------------------------------- preflight
+- name: Preflight | supported OS family
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['os_family'] == 'RedHat'
+    fail_msg: "linux_security_agent supports Fedora / RHEL-family hosts only"
+    quiet: true
+
+- name: Preflight | HEC settings present
+  ansible.builtin.assert:
+    that:
+      - hec_url is match('^https?://')
+      - hec_token | length > 0
+    fail_msg: "Set hec_url (http(s)://...) and hec_token in roles/linux_security_agent/defaults/main.yml"
+    quiet: true
+
+- name: Preflight | HEC CA file exists when configured
+  ansible.builtin.stat:
+    path: "{{ hec_ca_file }}"
+  register: agent_hec_ca
+  when: hec_ca_file | length > 0
+
+- name: Preflight | assert HEC CA file
+  ansible.builtin.assert:
+    that:
+      - agent_hec_ca.stat.exists
+    fail_msg: "hec_ca_file {{ hec_ca_file }} not found on {{ inventory_hostname }}"
+    quiet: true
+  when: hec_ca_file | length > 0
+
+- name: Preflight | filesystem type of each scan path
+  ansible.builtin.command:
+    argv: [findmnt, -n, -o, FSTYPE, -T, "{{ item }}"]
+  loop: "{{ scan_paths }}"
+  register: agent_scan_fstypes
+  changed_when: false
+  failed_when: false
+
+- name: Preflight | scan paths are on local filesystems
+  ansible.builtin.assert:
+    that:
+      - item.rc != 0 or (item.stdout | trim) not in scan_skip_fstypes
+    fail_msg: "{{ item.item }} is on {{ item.stdout | trim }}; remove it from scan_paths"
+    quiet: true
+  loop: "{{ agent_scan_fstypes.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+# ---------------------------------------------------------------- packages
+- name: Install required packages
+  ansible.builtin.dnf:
+    name: "{{ ['python3'] + clamav_packages }}"
+    state: present
+
+- name: Check clamscan binary
+  ansible.builtin.stat:
+    path: "{{ clamscan_bin }}"
+  register: agent_clamscan
+
+- name: Assert clamscan is installed
+  ansible.builtin.assert:
+    that:
+      - agent_clamscan.stat.exists
+      - agent_clamscan.stat.executable
+    fail_msg: "{{ clamscan_bin }} missing (RHEL needs EPEL or an internal repo for clamav)"
+    quiet: true
+
+# ---------------------------------------------------------------- retire on-access design
+- name: Gather service facts
+  ansible.builtin.service_facts:
+
+- name: Stop and disable on-access units
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop: "{{ agent_disable_units }}"
+  when: item in ansible_facts.services
+
+- name: Check legacy clamd config
+  ansible.builtin.stat:
+    path: "{{ agent_legacy_clamd_config }}"
+  register: agent_legacy_clamd
+  when: agent_legacy_clamd_config | length > 0
+
+- name: Remove legacy VirusEvent hook
+  ansible.builtin.lineinfile:
+    path: "{{ agent_legacy_clamd_config }}"
+    regexp: '^VirusEvent .*endpoint_agent\.py'
+    state: absent
+  when:
+    - agent_legacy_clamd_config | length > 0
+    - agent_legacy_clamd.stat.exists
+
+# ---------------------------------------------------------------- signatures
+- name: Find signature database
+  ansible.builtin.find:
+    paths: "{{ clamav_db_dir }}"
+    patterns: ["main.cvd", "main.cld"]
+  register: agent_clamav_db
+
+- name: Seed signature database
+  ansible.builtin.command: freshclam
+  when:
+    - agent_clamav_db.matched == 0
+    - freshclam_on_install | bool
+  changed_when: true
+
+- name: Re-check signature database
+  ansible.builtin.find:
+    paths: "{{ clamav_db_dir }}"
+    patterns: ["main.cvd", "main.cld"]
+  register: agent_clamav_db
+
+- name: Assert signature database present
+  ansible.builtin.assert:
+    that:
+      - agent_clamav_db.matched > 0
+    fail_msg: "No ClamAV signature database in {{ clamav_db_dir }}"
+    quiet: true
+
+- name: Enable signature updates
+  ansible.builtin.systemd:
+    name: "{{ freshclam_service }}"
+    enabled: true
+    state: started
+  when: freshclam_service | length > 0
+
+# ---------------------------------------------------------------- agent files
+- name: Create agent directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ agent_home }}", mode: "0755" }
+    - { path: "{{ agent_install_dir }}", mode: "0755" }
+    - { path: "{{ agent_config_dir }}", mode: "0700" }
+    - { path: "{{ agent_spool }}", mode: "0700" }
+    - { path: "{{ agent_state_dir }}", mode: "0700" }
+    - { path: "{{ agent_state_dir }}/tmp", mode: "0700" }
+    - { path: "{{ agent_log_dir }}", mode: "0750" }
+
+- name: Deploy Python agent
+  ansible.builtin.copy:
+    src: endpoint_agent.py
+    dest: "{{ agent_install_dir }}/endpoint_agent.py"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart endpoint agent
+
+- name: Deploy environment file
+  ansible.builtin.template:
+    src: agent.env.j2
+    dest: "{{ agent_config_dir }}/agent.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart endpoint agent
+
+- name: Deploy scan configuration
+  ansible.builtin.template:
+    src: scan.json.j2
+    dest: "{{ agent_config_dir }}/scan.json"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Deploy systemd units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ agent_units }}"
+  notify:
+    - Reload systemd
+    - Restart endpoint agent
+    - Restart scan timer
+
+- name: Restore SELinux contexts on agent paths
+  ansible.builtin.command:
+    argv:
+      - restorecon
+      - -Rv
+      - "{{ agent_home }}"
+      - "{{ agent_install_dir }}/endpoint_agent.py"
+      - "{{ agent_config_dir }}"
+      - "{{ agent_spool }}"
+      - "{{ agent_state_dir }}"
+      - "{{ agent_log_dir }}"
+  register: agent_restorecon
+  changed_when: agent_restorecon.stdout | length > 0
+  when: ansible_facts['selinux']['status'] | default('disabled') == 'enabled'
+
+- name: Apply pending systemd changes
+  ansible.builtin.meta: flush_handlers
+
+# ---------------------------------------------------------------- services
+- name: Enable and start worker
+  ansible.builtin.systemd:
+    name: endpoint-agent.service
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Enable and start scan timer
+  ansible.builtin.systemd:
+    name: endpoint-scan.timer
+    enabled: true
+    state: started
+
+# Services now run from agent_home; drop the old copies (incl. the HEC token).
+- name: Remove legacy install locations
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ agent_legacy_paths }}"
+
+- name: Run an initial scan now (non-blocking)
+  ansible.builtin.systemd:
+    name: endpoint-scan.service
+    state: started
+    no_block: true
+  when: scan_run_on_deploy | bool

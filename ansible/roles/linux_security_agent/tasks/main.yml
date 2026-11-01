@@ -1,0 +1,8 @@
+---
+- name: Install linux_security_agent
+  ansible.builtin.include_tasks: install.yml
+  when: not (agent_uninstall | bool)
+
+- name: Uninstall linux_security_agent
+  ansible.builtin.include_tasks: uninstall.yml
+  when: agent_uninstall | bool
